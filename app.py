@@ -9,98 +9,99 @@ from datetime import datetime, timezone
 st.set_page_config(layout="wide", page_title="Live Satellite Tracker")
 
 st.title("🛰️ Universal Live Satellite Tracker")
-st.write("Enter a satellite's unique NORAD Catalog ID or its exact name to fetch live TLE tracking data.")
+st.write("Enter a satellite's 5-digit NORAD Catalog ID to track its exact live position.")
 
 # Sidebar Configuration
 st.sidebar.header("Satellite Search")
-search_query = st.sidebar.text_input("Enter NORAD ID or Name (e.g., 25544, NOO-19, ISS)", "25544")
+search_query = st.sidebar.text_input("Enter 5-digit NORAD ID (e.g., 25544, 20580, 33591)", "25544").strip()
 
-# Step 1: Upgraded Fetching function that handles IDs or Names
-@st.cache_data(ttl=60)  # Short cache so it refreshes position often but doesn't spam the API
-def fetch_live_tle(query):
-    query = query.strip()
-    if not query:
+# Step 1: Bulletproof Fetching using Celestrak's updated GP query system
+def fetch_live_tle(norad_id):
+    if not norad_id or not norad_id.isdigit():
         return None
         
-    # Check if user entered a 5-digit number (Catalog ID)
-    if query.isdigit():
-        url = f"https://celestrak.org/NORAD/elements/gp.php?CATID={query}&FORMAT=tle"
-    else:
-        # Otherwise treat it as a general text name query
-        url = f"https://celestrak.org/NORAD/elements/gp.php?NAME={query}&FORMAT=tle"
-        
+    # Using the standardized, high-availability query parameters
+    url = f"https://celestrak.org/NORAD/elements/gp.php?CATID={norad_id}&FORMAT=TLE"
+    
     try:
         response = requests.get(url, timeout=10)
         if response.status_code == 200 and response.text.strip():
-            lines = response.text.splitlines()
-            # A valid TLE response from Celestrak will have 3 lines per satellite
-            if len(lines) >= 3 and not "No data found" in lines[0]:
-                return lines[0].strip(), lines[1].strip(), lines[2].strip()
+            lines = [line.strip() for line in response.text.splitlines() if line.strip()]
+            # Ensure we got back a full 3-line structural TLE
+            if len(lines) >= 3 and "No data found" not in lines[0]:
+                return lines[0], lines[1], lines[2]
     except Exception:
         return None
     return None
 
-tle_data = fetch_live_tle(search_query)
-
-if tle_data:
-    sat_name, tle_line1, tle_line2 = tle_data
-    
-    st.sidebar.success(f"🎯 Connected: {sat_name}")
-    with st.sidebar.expander("View Raw TLE Data"):
-        st.text(f"{sat_name}\n{tle_line1}\n{tle_line2}")
-    
+# Load the base world map with a backup mechanism
+@st.cache_data
+def load_world_map():
     try:
-        # Step 2: Initialize SGP4
-        satrec = Satrec.twoline2rv(tle_line1, tle_line2)
+        # High-availability reliable source
+        url = "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_land.geojson"
+        return gpd.read_file(url)
+    except Exception:
+        # Ultimate fallback map if the repository goes down
+        return gpd.read_file(gpd.datasets.get_path('naturalearth_lowres'))
+
+if search_query:
+    tle_data = fetch_live_tle(search_query)
+
+    if tle_data:
+        sat_name, tle_line1, tle_line2 = tle_data
         
-        # Step 3: Get exact live UTC time
-        now = datetime.now(timezone.utc)
-        jd, fr = jday(now.year, now.month, now.day, now.hour, now.minute, now.second + now.microsecond / 1e6)
+        st.sidebar.success(f"🎯 Tracking Active: {sat_name}")
         
-        # Propagate position
-        error_code, position, velocity = satrec.sgp4(jd, fr)
-        
-        if error_code == 0:
-            # Step 4: Convert Cartesian to Lat/Lon
-            x, y, z = position[0], position[1], position[2]
-            lon_deg = np.degrees(np.arctan2(y, x))
-            lat_deg = np.degrees(np.arctan2(z, np.sqrt(x**2 + y**2)))
+        try:
+            # Step 2: SGP4 Propagation Engine
+            satrec = Satrec.twoline2rv(tle_line1, tle_line2)
+            now = datetime.now(timezone.utc)
+            jd, fr = jday(now.year, now.month, now.day, now.hour, now.minute, now.second + now.microsecond / 1e6)
             
-            # Display tracking data metrics
-            c1, c2, c3 = st.columns(3)
-            c1.metric("Live Latitude", f"{lat_deg:.4f}°")
-            c2.metric("Live Longitude", f"{lon_deg:.4f}°")
-            c3.metric("Current Time (UTC)", now.strftime('%Y-%m-%d %H:%M:%S'))
+            error_code, position, velocity = satrec.sgp4(jd, fr)
             
-            # Step 5: Render World Map using online geojson
-            world_url = "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_land.geojson"
-            world = gpd.read_file(world_url)
-            
-            fig, ax = plt.subplots(figsize=(14, 7))
-            world.plot(ax=ax, color='#eaeaea', edgecolor='white')
-            
-            # Draw the live position marker
-            ax.scatter(lon_deg, lat_deg, color='#e63946', marker='X', s=300, 
-                       edgecolor='black', linewidth=1.5, label=sat_name)
-            
-            ax.set_xlim([-180, 180])
-            ax.set_ylim([-90, 90])
-            ax.grid(True, linestyle=':', color='gray', alpha=0.5)
-            ax.legend(loc='lower left', fontsize=12)
-            st.pyplot(fig)
-            
-            # Live Auto-Refresh
-            if st.button("🔄 Track Live Position", use_container_width=True):
-                st.rerun()
+            if error_code == 0:
+                # Step 3: Compute Geographic Coordinates
+                x, y, z = position[0], position[1], position[2]
+                lon_deg = np.degrees(np.arctan2(y, x))
+                lat_deg = np.degrees(np.arctan2(z, np.sqrt(x**2 + y**2)))
                 
-        else:
-            st.error(f"SGP4 Math Error (Code {error_code}).")
-            
-    except Exception as e:
-        st.error(f"Error parsing tracking models: {e}")
-else:
-    st.error(f"Could not find any active satellite matching '{search_query}'.")
-    st.info("💡 Pro-Tip: Try searching by its 5-digit NORAD ID number instead! For example:\n"
-            "- ISS (International Space Station): `25544`\n"
-            "- Hubble Space Telescope: `20580`\n"
-            "- NOAA-19 Weather Satellite: `33591`")
+                # Display tracking data cards
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Live Latitude", f"{lat_deg:.4f}°")
+                c2.metric("Live Longitude", f"{lon_deg:.4f}°")
+                c3.metric("Current Time (UTC)", now.strftime('%Y-%m-%d %H:%M:%S'))
+                
+                # Step 4: Map Visual Rendering
+                world = load_world_map()
+                
+                fig, ax = plt.subplots(figsize=(14, 7))
+                world.plot(ax=ax, color='#eaeaea', edgecolor='white')
+                
+                # Draw crosshair target marker
+                ax.scatter(lon_deg, lat_deg, color='#e63946', marker='X', s=300, 
+                           edgecolor='black', linewidth=1.5, label=sat_name)
+                
+                ax.set_xlim([-180, 180])
+                ax.set_ylim([-90, 90])
+                ax.grid(True, linestyle=':', color='gray', alpha=0.5)
+                ax.legend(loc='lower left', fontsize=12)
+                
+                st.pyplot(fig)
+                
+                # Refresh Trigger
+                if st.button("🔄 Force Live Refresh Update", use_container_width=True):
+                    st.rerun()
+                    
+            else:
+                st.error(f"SGP4 Math Error (Code {error_code}). Satellite orbit could not resolve.")
+                
+        except Exception as e:
+            st.error(f"Processing Error: {e}")
+    else:
+        st.error(f"Could not fetch TLE data for NORAD ID: {search_query}")
+        st.info("⚠️ Make sure you are using a valid 5-digit number:\n"
+                "- ISS (Space Station): `25544`\n"
+                "- Hubble Telescope: `20580`\n"
+                "- NOAA 19: `3
