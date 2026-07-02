@@ -5,10 +5,10 @@ import pandas as pd
 from sgp4.api import Satrec, jday
 from datetime import datetime, timezone
 
-st.set_page_config(layout="wide", page_title="Live Satellite Tracker")
+st.set_page_config(layout="wide", page_title="Live Satellite Tracker (GMT)")
 
 st.title("🛰️ Universal Live Satellite Tracker")
-st.write("Track any active satellite by trying a live API pull, or paste the TLE text yourself below if the server is blocked.")
+st.write("Track any active satellite by trying a live API pull, or paste the TLE text yourself below.")
 
 # Layout Columns
 col_input, col_display = st.columns([1, 2])
@@ -24,12 +24,10 @@ with col_input:
     if input_method == "Fetch via NORAD ID":
         norad_id = st.text_input("Enter 5-digit NORAD ID (e.g., 25544 for ISS)", "25544").strip()
         
-        # Safe query block
         if st.button("🛰️ Fetch Live TLE", use_container_width=True):
             if norad_id.isdigit():
                 url = f"https://celestrak.org/NORAD/elements/gp.php?CATID={norad_id}&FORMAT=TLE"
                 try:
-                    # Added a realistic user-agent string to avoid server automation blocks
                     headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
                     response = requests.get(url, headers=headers, timeout=8)
                     
@@ -49,13 +47,12 @@ with col_input:
             else:
                 st.warning("Please enter a valid numeric ID.")
                 
-        # Load from session storage
         sat_name = st.session_state.get('sat_name', 'ISS (ZARYA)')
         tle_line1 = st.session_state.get('tle1', '1 25544U 98067A   24061.62141410  .00015481  00000+0  27533-3 0  9993')
         tle_line2 = st.session_state.get('tle2', '2 25544  51.6416 189.2453 0001324  57.8546  68.2239 15.49479301441113')
 
     else:
-        st.info("💡 You can find fresh TLE entries directly on websites like celestrak.org or heavenseabove.com")
+        st.info("💡 You can find fresh TLE entries directly on websites like celestrak.org")
         sat_name = st.text_input("Satellite Name Label", "Custom Target")
         tle_line1 = st.text_input("Line 1", "1 25544U 98067A   24061.62141410  .00015481  00000+0  27533-3 0  9993").strip()
         tle_line2 = st.text_input("Line 2", "2 25544  51.6416 189.2453 0001324  57.8546  68.2239 15.49479301441113").strip()
@@ -66,8 +63,9 @@ with col_display:
     
     if tle_line1 and tle_line2:
         try:
-            # SGP4 Orbit Math Processing
             satrec = Satrec.twoline2rv(tle_line1, tle_line2)
+            
+            # Enforce current system clock tracking explicitly tied to timezone-neutral GMT calculations
             now = datetime.now(timezone.utc)
             jd, fr = jday(now.year, now.month, now.day, now.hour, now.minute, now.second + now.microsecond / 1e6)
             
@@ -78,15 +76,16 @@ with col_display:
                 lon_deg = float(np.degrees(np.arctan2(y, x)))
                 lat_deg = float(np.degrees(np.arctan2(z, np.sqrt(x**2 + y**2))))
                 
-                # Render clean metric readout
+                # Render clean metric readout updating the metrics card to explicit GMT
                 m1, m2, m3 = st.columns(3)
                 m1.metric("Target Label", sat_name)
                 m2.metric("Calculated Latitude", f"{lat_deg:.4f}°")
                 m3.metric("Calculated Longitude", f"{lon_deg:.4f}°")
                 
-                st.write(f"*Last Computed Position Epoch: {now.strftime('%Y-%m-%d %H:%M:%S')} UTC*")
+                # Visual Time Stamp string converted to clear GMT naming conventions
+                st.write(f"*Last Computed Position Epoch: {now.strftime('%Y-%m-%d %H:%M:%S')} GMT*")
                 
-                # Native fast mapping view
+                # Map rendering engine
                 map_df = pd.DataFrame({'lat': [lat_deg], 'lon': [lon_deg]})
                 st.map(map_df, zoom=1)
                 
