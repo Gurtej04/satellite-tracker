@@ -15,34 +15,30 @@ st.write("Enter a satellite's 5-digit NORAD Catalog ID to track its exact live p
 st.sidebar.header("Satellite Search")
 search_query = st.sidebar.text_input("Enter 5-digit NORAD ID (e.g., 25544, 20580, 33591)", "25544").strip()
 
-# Step 1: Bulletproof Fetching using Celestrak's updated GP query system
+# Step 1: Fetching data from Celestrak GP query system
 def fetch_live_tle(norad_id):
     if not norad_id or not norad_id.isdigit():
         return None
         
-    # Using the standardized, high-availability query parameters
     url = f"https://celestrak.org/NORAD/elements/gp.php?CATID={norad_id}&FORMAT=TLE"
     
     try:
         response = requests.get(url, timeout=10)
         if response.status_code == 200 and response.text.strip():
             lines = [line.strip() for line in response.text.splitlines() if line.strip()]
-            # Ensure we got back a full 3-line structural TLE
             if len(lines) >= 3 and "No data found" not in lines[0]:
                 return lines[0], lines[1], lines[2]
     except Exception:
         return None
     return None
 
-# Load the base world map with a backup mechanism
+# Load the base world map safely
 @st.cache_data
 def load_world_map():
     try:
-        # High-availability reliable source
         url = "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_land.geojson"
         return gpd.read_file(url)
     except Exception:
-        # Ultimate fallback map if the repository goes down
         return gpd.read_file(gpd.datasets.get_path('naturalearth_lowres'))
 
 if search_query:
@@ -50,7 +46,6 @@ if search_query:
 
     if tle_data:
         sat_name, tle_line1, tle_line2 = tle_data
-        
         st.sidebar.success(f"🎯 Tracking Active: {sat_name}")
         
         try:
@@ -79,7 +74,7 @@ if search_query:
                 fig, ax = plt.subplots(figsize=(14, 7))
                 world.plot(ax=ax, color='#eaeaea', edgecolor='white')
                 
-                # Draw crosshair target marker
+                # Draw target marker
                 ax.scatter(lon_deg, lat_deg, color='#e63946', marker='X', s=300, 
                            edgecolor='black', linewidth=1.5, label=sat_name)
                 
@@ -95,13 +90,10 @@ if search_query:
                     st.rerun()
                     
             else:
-                st.error(f"SGP4 Math Error (Code {error_code}). Satellite orbit could not resolve.")
+                st.error(f"SGP4 Math Error (Code {error_code}).")
                 
         except Exception as e:
             st.error(f"Processing Error: {e}")
     else:
         st.error(f"Could not fetch TLE data for NORAD ID: {search_query}")
-        st.info("⚠️ Make sure you are using a valid 5-digit number:\n"
-                "- ISS (Space Station): `25544`\n"
-                "- Hubble Telescope: `20580`\n"
-                "- NOAA 19: `3
+        st.info("💡 Try using a common 5-digit ID: ISS (25544), Hubble (20580), NOAA 19 (33591)")
